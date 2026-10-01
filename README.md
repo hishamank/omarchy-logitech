@@ -115,6 +115,36 @@ cell urgent, and a charging device gets the charging ramp or a bolt so it never
 reads as a dying one. The pre-1.1 `showBatteryText: false` is still honored
 when `batteryStyle` was never set.
 
+A device switched to another computer drops out of the bar and stays in the
+popup, faded and marked *Connected to another computer*, until it comes back.
+The daemon pushes every connect and disconnect to the panel, so the bar follows
+a host switch within seconds rather than on its next heartbeat.
+
+## Easy-Switch follow
+
+Press an Easy-Switch key on the keyboard and the mouse goes along to the same
+host, the way Logi Options+ does it between Macs. Developed against an MX Keys S
+leading an MX Master 3S, both over Bluetooth.
+
+The keyboard will not hand its Easy-Switch keys to software, but it can be asked
+to *report* them: with analytics reporting set on those keys, it sends a
+`CHANGE_HOST` notification naming the target host just before it leaves. The
+daemon sets that flag each time the keyboard connects (it is forgotten on every
+reconnect), listens for the notification, and sends every other connected device
+that supports host switching to the same host.
+
+- It works from this machine outward. Coming back from a Mac is Logi Options+'s
+  job on that Mac, and a Mac-to-Mac switch never involves this machine.
+- The devices must share a channel layout — channel 2 is this machine on both.
+  `solaar show` lists each device's hosts.
+- The keyboard is armed about a second after it reconnects; an Easy-Switch key
+  pressed sooner than that leaves the mouse behind.
+- `logi daemon --no-follow` turns it off.
+
+```bash
+journalctl --user -u omarchy-logitech | grep easy-switch   # arm and follow events
+```
+
 ## The settings window
 
 The popup stays curated; the settings window shows everything writable. Open it
@@ -199,8 +229,9 @@ and the per-key color map (a hundred-row footgun).
 2–5 seconds, because it probes every HID++ feature the device claims. Paying
 that per slider tick is hopeless, so `logi daemon` holds the devices open and
 answers over `$XDG_RUNTIME_DIR/omarchy-logitech.sock`; reads and writes then
-cost one HID++ round trip. The panel keeps one socket open for the session and
-matches replies to requests by `id`. Every CLI command prefers the daemon and
+cost one HID++ round trip. The panel keeps one socket open for the session,
+matches replies to requests by `id`, and subscribes to a `devices-changed`
+event the daemon pushes after every rebuild. Every CLI command prefers the daemon and
 falls back to doing the work in-process when it is not running (`--direct`
 forces the slow path), so nothing depends on the daemon being up.
 

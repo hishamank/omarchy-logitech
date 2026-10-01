@@ -73,6 +73,12 @@ Item {
       lastError = "could not parse a daemon reply"
       return
     }
+    // Unsolicited pushes from the daemon carry an event and no id.
+    if (message.event === "devices-changed") {
+      refresh(false)
+      if (detailedDevices.length > 0) refreshDetailed()
+      return
+    }
     var callback = message.id !== undefined ? _pending[message.id] : null
     if (callback) delete _pending[message.id]
     if (message.ok === false) {
@@ -332,6 +338,9 @@ Item {
       if (link.connected) {
         root.everConnected = true
         root.lastError = ""
+        // Ask to be told when devices come and go (a host switch, a replug),
+        // so the bar does not wait for the heartbeat to notice.
+        root.send({ action: "subscribe" })
         root.refresh(false)
       } else if (root.everConnected) {
         // The daemon restarted (or was updated) — reconnect and resync.
@@ -357,7 +366,9 @@ Item {
     id: reconnectTimer
     interval: 2500
     repeat: false
-    onTriggered: if (!link.connected) link.connected = true
+    // A failed connect can leave `connected` already true, which makes a
+    // plain `= true` a no-op that never retries; drop it first.
+    onTriggered: if (!root.connected) { link.connected = false; link.connected = true }
   }
 
   Timer {

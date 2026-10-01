@@ -51,11 +51,17 @@ function batteryDetail(battery) {
   return text + " · " + plain(status)
 }
 
+// A device the daemon could not reach — most often one switched to another
+// host with Easy-Switch. Older daemons send no `online` field; treat that as up.
+function isOnline(device) {
+  return !!device && device.online !== false
+}
+
 // Devices that report a battery, weakest first — the bar shows the one most
 // likely to strand you mid-task.
 function batteryDevices(devices) {
   var withBattery = (devices || []).filter(function (d) {
-    return d.battery && d.battery.level !== null && d.battery.level !== undefined
+    return isOnline(d) && d.battery && d.battery.level !== null && d.battery.level !== undefined
   })
   withBattery.sort(function (a, b) { return Number(a.battery.level) - Number(b.battery.level) })
   return withBattery
@@ -78,6 +84,7 @@ function barTooltip(devices, connected, error) {
   if (!connected) return "Logitech — connecting to the device daemon…"
   if (!devices || devices.length === 0) return "Logitech — no devices connected"
   var lines = devices.map(function (d) {
+    if (!isOnline(d)) return plain(d.name) + "  not connected"
     var battery = d.battery ? "  " + batteryDetail(d.battery) : ""
     return plain(d.name) + battery
   })
