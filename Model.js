@@ -51,10 +51,14 @@ function batteryDetail(battery) {
   return text + " · " + plain(status)
 }
 
-// A device the daemon could not reach — most often one switched to another
-// host with Easy-Switch. Older daemons send no `online` field; treat that as up.
+// A device that is here for the bar's purposes. Only a confirmed switch to
+// another host (`state: "elsewhere"`) removes it; a merely silent one (a
+// dozing receiver device) keeps its card and battery. Older daemons send no
+// `state`: fall back to their `online` field, and treat no field as up.
 function isOnline(device) {
-  return !!device && device.online !== false
+  if (!device) return false
+  if (device.state !== undefined) return device.state !== "elsewhere"
+  return device.online !== false
 }
 
 // Devices that report a battery, weakest first — the bar shows the one most

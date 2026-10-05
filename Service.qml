@@ -35,6 +35,8 @@ Item {
 
   property int _nextId: 1
   property var _pending: ({})
+  // Ids of requests whose failure should not reach the user (see `quiet`).
+  property var _quiet: ({})
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -57,6 +59,13 @@ Item {
     }
     var id = _nextId++
     request.id = id
+    // `quiet` stays on this side: an error reply to it is not shown. The
+    // subscribe request uses it, since a daemon older than the push events
+    // answers "unknown action" and the heartbeat covers the refresh anyway.
+    if (request.quiet) {
+      _quiet[id] = true
+      delete request.quiet
+    }
     if (callback) _pending[id] = callback
     link.write(JSON.stringify(request) + "\n")
     link.flush()
@@ -81,7 +90,11 @@ Item {
     }
     var callback = message.id !== undefined ? _pending[message.id] : null
     if (callback) delete _pending[message.id]
-    if (message.ok === false) {
+    var quiet = message.id !== undefined && _quiet[message.id] === true
+    if (quiet) delete _quiet[message.id]
+    if (message.ok === false && quiet) {
+      // Swallowed on purpose; neither lastError nor actionStatus is touched.
+    } else if (message.ok === false) {
       lastError = String(message.error || "device command failed")
       actionStatus = lastError
       statusResetTimer.restart()
@@ -340,7 +353,7 @@ Item {
         root.lastError = ""
         // Ask to be told when devices come and go (a host switch, a replug),
         // so the bar does not wait for the heartbeat to notice.
-        root.send({ action: "subscribe" })
+        root.send({ action: "subscribe", quiet: true })
         root.refresh(false)
       } else if (root.everConnected) {
         // The daemon restarted (or was updated) — reconnect and resync.

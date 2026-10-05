@@ -656,6 +656,7 @@ Panel {
               Layout.fillWidth: true
               text: !section.device ? ""
                 : !section.online ? "Connected to another computer"
+                : section.device.state === "unreachable" ? section.device.via + " · not responding"
                 : section.device.via
               textFormat: Text.PlainText
               color: root.dim
