@@ -1403,10 +1403,13 @@ class Daemon:
         key = entry["key"]
         cached = self.reachable.get(key)
         if cached is None:
-            # Before the first sweep. A direct device answers or fails fast.
-            cached = (is_online(entry["dev"]), time.monotonic())
-            self.reachable[key] = cached
-        online = cached[0]
+            # Not swept yet (the daemon just started, or the device just
+            # appeared). Pinging here would hold self.lock for up to 4 s on a
+            # dozing receiver device, so use solaar's flag for now and leave it
+            # uncached: the next sweep, within seconds, pings it and pushes.
+            online = bool(getattr(entry["dev"], "online", False))
+        else:
+            online = cached[0]
         with self.away_lock:
             if key in self.away:
                 return online, "elsewhere"
@@ -1422,13 +1425,20 @@ class Daemon:
 
         Direct devices (Bluetooth, USB) are checked every sweep: their ping
         fails fast. A receiver's device is checked every minute only, since a
-        dozing one costs solaar's full 4 s timeout. solaar serializes requests
-        per handle, so this blocks neither the daemon lock nor other devices.
-        A device marked away is cleared once it has gone silent and answers
-        again, or after `away_limit` seconds if it never went silent.
+        dozing one costs solaar's full 4 s timeout. This never holds the
+        daemon lock, but solaar locks per handle and every device on a
+        receiver shares that receiver's handle: while a dozing device's ping
+        waits, a request to another device on the same receiver waits too
+        (up to 4 s, once a minute). A device marked away is cleared once it
+        has gone silent and answers again, or after `away_limit` seconds if
+        it never went silent.
         """
+        first = True
         while True:
-            time.sleep(period)
+            # The first sweep runs at once, so the cache fills right after start.
+            if not first:
+                time.sleep(period)
+            first = False
             changed = False
             now = time.monotonic()
             entries = list(self.index.entries)
@@ -1458,7 +1468,7 @@ class Daemon:
                     elif rec["silent"] and self.reachable.get(key, (False,))[0]:
                         del self.away[key]
                         changed = True
-                    elif now - rec["at"] > away_limit:
+                    elif not rec["silent"] and now - rec["at"] > away_limit:
                         del self.away[key]
                         changed = True
             for key in list(self.reachable):

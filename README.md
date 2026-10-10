@@ -128,7 +128,10 @@ Reachability is measured in the background, not per request: Bluetooth and USB
 devices are pinged every few seconds, a receiver's devices once a minute, and
 `status` answers from that cache. The daemon pushes every change to the panel,
 so the bar follows a host switch within seconds rather than on its next
-heartbeat.
+heartbeat. A receiver's device that comes back can take up to a minute to show
+as connected again, since a dozing one costs a 4 s ping timeout and it is
+checked less often. While that ping waits, requests to other devices on the
+same receiver wait with it.
 
 ## Easy-Switch follow
 
