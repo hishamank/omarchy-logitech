@@ -210,10 +210,22 @@ class Index:
         self.incomplete = False
         self.reclaim = reclaim
         self._lock = threading.Lock()
+        self.hotplug_monitored = False
+        self._removed_paths = {}
+        self._removal_lock = threading.Lock()
+        self._removal_generation = 0
+
+    def device_removed(self, path):
+        if path:
+            with self._removal_lock:
+                self._removal_generation += 1
+                self._removed_paths[path] = self._removal_generation
 
     def rebuild(self):
         with self._lock:
             fresh = discover()
+            with self._removal_lock:
+                removed = dict(self._removed_paths)
             previous = {entry["key"]: entry for entry in self.entries}
             merged = []
             for entry in fresh:
@@ -238,12 +250,19 @@ class Index:
                     None,
                 )
                 old = previous.pop(match) if match else None
-                # Only a receiver's device can doze on a link that stays up.
-                # A Bluetooth or USB device that comes back as a new Device
-                # object re-enumerated, so the old object's hidraw node is
-                # gone (and may already belong to another device): keeping it
-                # would leave the entry dead until the next hotplug.
-                asleep = old and old["settings"] and getattr(old["dev"], "receiver", None) is not None
+                # A scan can catch a USB headset powered off while its dongle
+                # stays connected. Keep its controls if the old node is still
+                # the same and the monitor saw no removal, even if another
+                # device caused this rebuild. A removed/reused node must never
+                # inherit the old handle. Without a monitor, only receiver
+                # devices can safely keep their old entry.
+                old_path = getattr(old["dev"], "path", None) if old else None
+                unchanged = (self.hotplug_monitored and old_path
+                             and old_path == getattr(entry["dev"], "path", None)
+                             and old_path not in removed)
+                asleep = old and old["settings"] and (
+                    getattr(old["dev"], "receiver", None) is not None or unchanged
+                )
                 merged.append(old if asleep else entry)
             # rgb_power keys its managers by Device object identity, so stop
             # the managers of Device objects this rebuild just discarded —
@@ -264,6 +283,10 @@ class Index:
             if self.reclaim:
                 reclaim_lighting(self.entries)
             self.built_at = time.time()
+            with self._removal_lock:
+                for path, generation in removed.items():
+                    if self._removed_paths.get(path) == generation:
+                        del self._removed_paths[path]
         return self.entries
 
     def all(self):
@@ -1010,6 +1033,11 @@ def feature_index(dev, feature):
         return None
 
 
+def report_path(dev):
+    """Receiver-paired devices may have no separate hidraw node."""
+    return getattr(dev, "path", None) or getattr(getattr(dev, "receiver", None), "path", None)
+
+
 def announce_host_switches(dev):
     """Ask a keyboard to tell this host when an Easy-Switch key sends it away.
 
@@ -1208,6 +1236,7 @@ class Daemon:
         threading.Thread(target=self.open_live, args=(path,), daemon=True).start()
 
     def device_removed(self, path):
+        self.index.device_removed(path)
         with self.live_lock:
             dev = self.live.pop(path, None)
         if dev is not None:
@@ -1277,8 +1306,10 @@ class Daemon:
             try:
                 if getattr(dev, "receiver", None) is None or str(getattr(dev, "kind", "")) != "keyboard":
                     continue
-                if is_online(dev):
-                    self.arm(dev, dev.path)
+                if feature_index(dev, SupportedFeature.CHANGE_HOST) is None:
+                    continue
+                if self.reach_of(entry)[0]:
+                    self.arm(dev, report_path(dev))
             except Exception as exc:
                 # A convenience must never take the daemon down with it.
                 log(f"easy-switch: could not arm {entry['key']}: {type(exc).__name__}: {exc}")
@@ -1289,6 +1320,8 @@ class Daemon:
         Returns False when the keyboard did not take the request yet, so the
         caller retries; True once armed, or when there is nothing to arm.
         """
+        if not path:
+            return False
         index = feature_index(dev, SupportedFeature.CHANGE_HOST)
         if index is None:
             return True
@@ -1374,7 +1407,7 @@ class Daemon:
         behind = [
             (entry["key"], entry["dev"]) for entry in list(self.index.entries)
             if getattr(entry["dev"], "receiver", None) is not None
-            and (entry["dev"].path, getattr(entry["dev"], "number", None)) != ident
+            and (report_path(entry["dev"]), getattr(entry["dev"], "number", None)) != ident
         ]
         if behind:
             with self.lock:
@@ -1455,6 +1488,13 @@ class Daemon:
                 except Exception:
                     online = False
                 self.reachable[key] = (online, now)
+                if (self.follow and behind_receiver and online
+                        and (cached is None or not cached[0])
+                        and str(getattr(dev, "kind", "")) == "keyboard"):
+                    try:
+                        self.arm(dev, report_path(dev))
+                    except Exception as exc:
+                        log(f"easy-switch: could not arm {key}: {type(exc).__name__}: {exc}")
                 if cached is None or cached[0] != online:
                     changed = True
                 with self.away_lock:
@@ -1504,15 +1544,17 @@ class Daemon:
             context = pyudev.Context()
             monitor = pyudev.Monitor.from_netlink(context)
             monitor.filter_by(subsystem="hidraw")
+            self.index.hotplug_monitored = True
             for device in iter(monitor.poll, None):
                 if device.action in ("add", "remove"):
-                    self.stale.set()
                     if device.action == "add":
                         self.device_added(device.device_node)
                     else:
                         self.device_removed(device.device_node)
+                    self.stale.set()
                     self.hotplugged.set()
         except Exception:
+            self.index.hotplug_monitored = False
             # No pyudev, or the netlink socket went away: fall back to marking
             # the index stale periodically so a hotplug is noticed eventually.
             while True:
