@@ -61,6 +61,11 @@ class LifecycleTests(unittest.TestCase):
         with patch.dict(Daemon.arm_easy_switch.__globals__, feature_index=lambda *args: None):
             daemon.arm_easy_switch()
         daemon.arm.assert_not_called()
+        # solaar caches a feature the device lacks as False, not None.
+        with patch.dict(Daemon.arm_easy_switch.__globals__, feature_index=lambda *args: False):
+            daemon.arm_easy_switch()
+            daemon.arm.assert_not_called()
+            self.assertTrue(Daemon().arm(dev, "/dev/hidraw-bolt"))
         self.assertFalse(Daemon().arm(dev, None))
 
     def test_receiver_source_is_not_moved_again(self):

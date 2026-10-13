@@ -634,6 +634,7 @@ Panel {
 
           BatteryRing {
             device: section.device
+            battery: section.battery
             Layout.alignment: Qt.AlignVCenter
           }
 
@@ -703,7 +704,7 @@ Panel {
   component BatteryRing: Item {
     id: ring
     property var device: null
-    readonly property var battery: device ? device.battery : null
+    property var battery: device ? device.battery : null
     readonly property color tint: battery && battery.low ? root.urgent : root.foreground
     readonly property real strokeW: Math.max(2, Style.spaceReal(2))
 

@@ -1027,6 +1027,7 @@ HOST_SWITCH_KEYS = (0xD1, 0xD2, 0xD3)
 
 
 def feature_index(dev, feature):
+    """Feature index, `False` when the device lacks it, `None` on error."""
     try:
         return dev.features[feature]
     except Exception:
@@ -1306,7 +1307,7 @@ class Daemon:
             try:
                 if getattr(dev, "receiver", None) is None or str(getattr(dev, "kind", "")) != "keyboard":
                     continue
-                if feature_index(dev, SupportedFeature.CHANGE_HOST) is None:
+                if not feature_index(dev, SupportedFeature.CHANGE_HOST):
                     continue
                 if self.reach_of(entry)[0]:
                     self.arm(dev, report_path(dev))
@@ -1323,7 +1324,7 @@ class Daemon:
         if not path:
             return False
         index = feature_index(dev, SupportedFeature.CHANGE_HOST)
-        if index is None:
+        if not index:
             return True
         if not announce_host_switches(dev):
             return False
@@ -1389,7 +1390,7 @@ class Daemon:
                 self.mark_away(source, entry["dev"].name, str(getattr(entry["dev"], "kind", "")), entry["via"])
 
         def move(label, dev):
-            if feature_index(dev, SupportedFeature.CHANGE_HOST) is None:
+            if not feature_index(dev, SupportedFeature.CHANGE_HOST):
                 return
             try:
                 # setCurrentHost; the device leaves at once, so a missing
@@ -1405,15 +1406,15 @@ class Daemon:
         for label, dev in direct:
             move(label, dev)
         behind = [
-            (entry["key"], entry["dev"]) for entry in list(self.index.entries)
+            entry for entry in list(self.index.entries)
             if getattr(entry["dev"], "receiver", None) is not None
             and (report_path(entry["dev"]), getattr(entry["dev"], "number", None)) != ident
         ]
         if behind:
             with self.lock:
-                for label, dev in behind:
-                    if is_online(dev):
-                        move(label, dev)
+                for entry in behind:
+                    if self.reach_of(entry)[0]:
+                        move(entry["key"], entry["dev"])
         log(f"easy-switch: {source} left for host {target + 1}; moved {', '.join(moved) or 'nothing'}")
 
     # --- Reachability -------------------------------------------------------
