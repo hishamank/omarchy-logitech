@@ -65,8 +65,18 @@ class LifecycleTests(unittest.TestCase):
         with patch.dict(Daemon.arm_easy_switch.__globals__, feature_index=lambda *args: False):
             daemon.arm_easy_switch()
             daemon.arm.assert_not_called()
-            self.assertTrue(Daemon().arm(dev, "/dev/hidraw-bolt"))
+            self.assertIsNone(Daemon().arm(dev, "/dev/hidraw-bolt"))
         self.assertFalse(Daemon().arm(dev, None))
+
+    def test_silent_device_stops_being_incomplete(self):
+        index = Index()
+        with patch.dict(Index.rebuild.__globals__, discover=lambda: [entry()], rgb_power=None):
+            index.rebuild()
+        self.assertTrue(index.incomplete)  # just went silent: may be mid-connect
+        index._empty_since["/dev/hidraw-headset"] -= 31
+        with patch.dict(Index.rebuild.__globals__, discover=lambda: [entry()], rgb_power=None):
+            index.rebuild()
+        self.assertFalse(index.incomplete)  # off all along: no more retries
 
     def test_receiver_source_is_not_moved_again(self):
         dev = NS(path=None, receiver=NS(path="/dev/hidraw-bolt"), kind="keyboard",

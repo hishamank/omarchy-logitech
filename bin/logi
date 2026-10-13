@@ -208,6 +208,7 @@ class Index:
         # A directly connected device that answered with no settings — caught
         # mid-connect; the daemon rebuilds again shortly rather than keep it.
         self.incomplete = False
+        self._empty_since = {}
         self.reclaim = reclaim
         self._lock = threading.Lock()
         self.hotplug_monitored = False
@@ -276,10 +277,19 @@ class Index:
                         except Exception:
                             pass
             self.entries = merged
-            self.incomplete = any(
-                not entry["settings"] and getattr(entry["dev"], "receiver", None) is None
-                for entry in merged
-            )
+            # A direct device that just stopped answering may still be
+            # connecting; the retry window covers the hotplug schedule plus
+            # quiet time. One that has been silent longer is simply off and
+            # must not send every later hotplug burst through the retries.
+            now = time.monotonic()
+            empty = {}
+            for entry in merged:
+                if entry["settings"] or getattr(entry["dev"], "receiver", None) is not None:
+                    continue
+                key = getattr(entry["dev"], "path", None) or entry["key"]
+                empty[key] = self._empty_since.get(key, now)
+            self._empty_since = empty
+            self.incomplete = any(now - first < 30 for first in empty.values())
             if self.reclaim:
                 reclaim_lighting(self.entries)
             self.built_at = time.time()
@@ -1293,7 +1303,11 @@ class Daemon:
                     pass
             if kind != "keyboard":
                 return
-            if self.arm(dev, path):
+            armed = self.arm(dev, path)
+            if armed is None:
+                log(f"easy-switch: {path} does not report host switches")
+                return
+            if armed:
                 log(f"easy-switch: armed {path} {(time.monotonic() - added) * 1000:.0f} ms after it appeared")
                 return
         log(f"easy-switch: {path} never answered; it will not lead a host switch")
@@ -1318,14 +1332,17 @@ class Daemon:
     def arm(self, dev, path):
         """Have a keyboard announce host switches, and listen for them.
 
-        Returns False when the keyboard did not take the request yet, so the
-        caller retries; True once armed, or when there is nothing to arm.
+        Returns True once armed, None when the device cannot report host
+        switches at all, and False when it did not take the request yet, so
+        the caller retries.
         """
         if not path:
             return False
         index = feature_index(dev, SupportedFeature.CHANGE_HOST)
-        if not index:
-            return True
+        if index is False:
+            return None
+        if index is None:
+            return False
         if not announce_host_switches(dev):
             return False
         ident = (path, getattr(dev, "number", None))
