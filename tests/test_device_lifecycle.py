@@ -12,7 +12,8 @@ Index, Daemon = backend["Index"], backend["Daemon"]
 
 def entry(path="/dev/hidraw-headset", settings=None, receiver=None):
     return {"key": "pro-x", "via": "USB", "settings": settings or [],
-            "dev": NS(path=path, receiver=receiver, kind="headset")}
+            "dev": NS(path=path, receiver=receiver, kind="headset",
+                      handle=Mock(), low_level=Mock())}
 
 
 class LifecycleTests(unittest.TestCase):
@@ -46,6 +47,45 @@ class LifecycleTests(unittest.TestCase):
     def test_no_monitor_discards_direct_handle(self):
         index, _, fresh = self.rebuild(monitored=False)
         self.assertIs(index.entries[0], fresh)
+
+    def test_dropped_device_releases_its_handle(self):
+        Device = backend["hid_device"].Device
+        index = Index()
+        old = entry(settings=["sidetone"])
+        dev = old["dev"]
+        handle = dev.handle
+        Device.instances.append(dev)
+        index.entries = [old]
+        index.hotplug_monitored = True
+        index.device_removed(dev.path)
+        with patch.dict(Index.rebuild.__globals__, discover=lambda: [entry()], rgb_power=None):
+            index.rebuild()
+        leaked = dev in Device.instances
+        while dev in Device.instances:
+            Device.instances.remove(dev)
+        self.assertIsNone(dev.handle)
+        dev.low_level.close.assert_called_once_with(handle)
+        self.assertFalse(leaked)
+
+    def test_discover_releases_fold_loser(self):
+        discover = backend["discover"]
+        Device = backend["hid_device"].Device
+        a = NS(path="/dev/hidraw-a", receiver=None, kind="headset", name="Pro X",
+               bluetooth=False, settings=["sidetone"], handle=Mock(), low_level=Mock())
+        b = NS(path="/dev/hidraw-b", receiver=None, kind="headset", name="Pro X",
+               bluetooth=False, settings=["sidetone"], handle=Mock(), low_level=Mock())
+        Device.instances += [a, b]
+        try:
+            with patch.dict(discover.__globals__, _receivers_and_devices=lambda: iter([a, b])):
+                got = discover()
+            self.assertEqual(len(got), 1)
+            self.assertIs(got[0]["dev"], a)
+            self.assertIsNone(b.handle)
+            self.assertNotIn(b, Device.instances)
+        finally:
+            for d in (a, b):
+                while d in Device.instances:
+                    Device.instances.remove(d)
 
     def test_receiver_path_and_cached_arming(self):
         dev = NS(path=None, receiver=NS(path="/dev/hidraw-bolt"), kind="keyboard",

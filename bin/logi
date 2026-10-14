@@ -27,6 +27,7 @@ which keeps the CLI usable on its own.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
@@ -268,14 +269,22 @@ class Index:
             # rgb_power keys its managers by Device object identity, so stop
             # the managers of Device objects this rebuild just discarded —
             # otherwise every rebuild leaks one manager per lit keyboard.
+            kept = {id(entry["dev"]) for entry in merged}
             if rgb_power is not None:
-                kept = {id(entry["dev"]) for entry in merged}
                 for entry in self.entries:
                     if id(entry["dev"]) not in kept:
                         try:
                             rgb_power.stop(entry["dev"])
                         except Exception:
                             pass
+            # discover() opens a hidraw node per device, and solaar pins every
+            # Device in Device.instances: an entry the merge dropped keeps its
+            # fd open — a leak per device per rebuild, multiplied by the
+            # hotplug retries.
+            for entry in [*self.entries, *fresh]:
+                if id(entry["dev"]) not in kept:
+                    release_device(entry["dev"])
+            gc.collect()  # a dropped receiver child frees its receiver's fd too
             self.entries = merged
             # A direct device that just stopped answering may still be
             # connecting; the retry window covers the hotplug schedule plus
@@ -325,6 +334,25 @@ class Index:
         return None
 
 
+def release_device(dev):
+    """Release a Device the caller is done with, without dev.close().
+
+    solaar pins every Device it creates in Device.instances, so letting one
+    go out of scope keeps its hidraw fd open forever. close() also runs
+    cleanups, which write to the device — right for whoever configured it,
+    wrong for a duplicate handle that never did.
+    """
+    try:
+        dev.cleanups = []
+        handle, dev.handle = getattr(dev, "handle", None), None
+        if handle:
+            dev.low_level.close(handle)
+        instances = hid_device.Device.instances
+        instances[:] = [inst for inst in instances if inst is not dev]
+    except Exception:
+        pass
+
+
 def discover():
     """Every reachable device, whether plugged in directly or behind a receiver."""
     found = []
@@ -363,8 +391,11 @@ def discover():
         if match is None:
             best[slug] = entry
         elif rank(entry) > rank(best[match]):
-            best.pop(match)
+            release_device(best.pop(match)["dev"])
             best[slug] = entry
+        else:
+            # The loser keeps its fd pinned in Device.instances otherwise.
+            release_device(entry["dev"])
 
     keep = list(best.values())
 
