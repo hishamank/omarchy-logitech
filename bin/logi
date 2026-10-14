@@ -1471,12 +1471,16 @@ class Daemon:
         with self.away_lock:
             return [rec["snapshot"] for key, rec in self.away.items() if key not in present]
 
-    def watch_reach(self, period=5.0, receiver_period=60.0, away_limit=120.0):
+    def watch_reach(self, period=5.0, bluetooth_period=15.0, receiver_period=60.0, away_limit=120.0):
         """Refresh the reachability cache, and push when it changes.
 
-        Direct devices (Bluetooth, USB) are checked every sweep: their ping
-        fails fast. A receiver's device is checked every minute only, since a
-        dozing one costs solaar's full 4 s timeout. This never holds the
+        USB devices are checked every sweep: their ping fails fast and they
+        spend no battery on it. Bluetooth devices are checked every
+        `bluetooth_period` seconds instead: each ping is radio time on their
+        battery, and a device leaving or returning is seen by udev anyway,
+        so the ping only has to notice one that is silent while connected.
+        A receiver's device is checked every minute only, since a dozing
+        one costs solaar's full 4 s timeout. This never holds the
         daemon lock, but solaar locks per handle and every device on a
         receiver shares that receiver's handle: while a dozing device's ping
         waits, a request to another device on the same receiver waits too
@@ -1499,7 +1503,10 @@ class Daemon:
                 present.add(key)
                 cached = self.reachable.get(key)
                 behind_receiver = getattr(dev, "receiver", None) is not None
-                if cached is not None and behind_receiver and now - cached[1] < receiver_period:
+                interval = (receiver_period if behind_receiver
+                            else bluetooth_period if getattr(dev, "bluetooth", False)
+                            else period)
+                if cached is not None and now - cached[1] < interval:
                     continue
                 try:
                     online = is_online(dev)
