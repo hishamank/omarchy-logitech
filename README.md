@@ -124,9 +124,10 @@ that is dozing, is not treated as gone: it keeps its card, controls and battery
 and shows *not responding*. A switch started elsewhere (from a Mac) leaves no
 trace here, so that device also shows as *not responding*.
 
-Reachability is measured in the background, not per request: Bluetooth and USB
-devices are pinged every few seconds, a receiver's devices once a minute, and
-`status` answers from that cache. The daemon pushes every change to the panel,
+Reachability is measured in the background, not per request: USB devices are
+pinged every few seconds, Bluetooth ones every fifteen (each ping is radio
+time on their battery), a receiver's devices once a minute, and `status`
+answers from that cache. The daemon pushes every change to the panel,
 so the bar follows a host switch within seconds rather than on its next
 heartbeat. A receiver's device that comes back can take up to a minute to show
 as connected again, since a dozing one costs a 4 s ping timeout and it is

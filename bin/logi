@@ -1543,7 +1543,16 @@ class Daemon:
                     online = is_online(dev)
                 except Exception:
                     online = False
-                self.reachable[key] = (online, now)
+                # The ping can race a rebuild that dropped this entry and
+                # closed the Device's fd under it; that failure says nothing
+                # about the fresh entry now owning the key. Take the rebuild
+                # lock for the check and the write, so the result is cached
+                # only if this entry is still the one the index serves.
+                with self.index._lock:
+                    if any(e is entry for e in self.index.entries):
+                        self.reachable[key] = (online, now)
+                    else:
+                        continue
                 if (self.follow and behind_receiver and online
                         and (cached is None or not cached[0])
                         and str(getattr(dev, "kind", "")) == "keyboard"):

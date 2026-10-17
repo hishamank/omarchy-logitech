@@ -108,6 +108,28 @@ class LifecycleTests(unittest.TestCase):
             self.assertIsNone(Daemon().arm(dev, "/dev/hidraw-bolt"))
         self.assertFalse(Daemon().arm(dev, None))
 
+    def test_dropped_entry_ping_does_not_poison_the_cache(self):
+        # A rebuild can drop an entry while its ping is in flight and close
+        # the fd under it; that failure belongs to the dead handle and must
+        # not mark the fresh entry now owning the key unreachable.
+        daemon = Daemon()
+        daemon.index.entries = [entry()]
+        clock = NS(monotonic=backend["time"].monotonic,
+                   sleep=Mock(side_effect=StopIteration))
+
+        def drop_mid_ping(dev):
+            daemon.index.entries = [entry()]  # fresh entry, same key
+            return False
+
+        reach_globals = Daemon.watch_reach.__globals__
+        with patch.dict(reach_globals, is_online=drop_mid_ping, time=clock):
+            self.assertRaises(StopIteration, daemon.watch_reach)
+        self.assertNotIn("pro-x", daemon.reachable)
+        # The same write lands when the entry survives the sweep.
+        with patch.dict(reach_globals, is_online=Mock(return_value=True), time=clock):
+            self.assertRaises(StopIteration, daemon.watch_reach)
+        self.assertTrue(daemon.reachable["pro-x"][0])
+
     def test_silent_device_stops_being_incomplete(self):
         index = Index()
         with patch.dict(Index.rebuild.__globals__, discover=lambda: [entry()], rgb_power=None):
